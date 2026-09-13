@@ -1,0 +1,10 @@
+node_modules
+dist
+test-results
+playwright-report
+e2e/fixtures
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+README.md

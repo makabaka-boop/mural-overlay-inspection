@@ -1,0 +1,19 @@
+services:
+  web:
+    build:
+      context: .
+      target: web
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+  # 一次性验收服务：构建镜像后执行 `docker compose run --rm verify`
+  # （或 `docker compose up --build verify`），跑完即退出并返回退出码。
+  verify:
+    build:
+      context: .
+      target: verify
+    depends_on:
+      - web
+    environment:
+      PLAYWRIGHT_BASE_URL: http://web:80
+    restart: "no"

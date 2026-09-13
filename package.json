@@ -1,0 +1,31 @@
+{
+  "name": "mural-wipe-verify",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "修复前后壁画擦镜核验台：纯浏览器、本地文件、Canvas 2D",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "pretest:e2e": "node scripts/make-fixtures.mjs",
+    "test:e2e": "playwright test",
+    "verify": "npm run test:unit && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.2",
+    "@types/node": "^26.5.1",
+    "@types/react": "^18.3.10",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.2",
+    "typescript": "~5.6.2",
+    "vite": "^5.4.8",
+    "vitest": "^2.1.2"
+  }
+}
