@@ -219,3 +219,191 @@ test('合法替换单侧后视口保留，错误随后可恢复', async ({ page 
   await expect(page.locator(labels.center)).toHaveText('(800, 600)');
   await expect(page.locator(labels.zoom)).toHaveText('1×');
 });
+
+// ── 像素取样 ─────────────────────────────────────────────────────────────
+
+/** big 夹具在原图坐标 (x,y) 的像素（见 scripts/make-fixtures.mjs pattern） */
+function bigPixel(kind: 'r' | 'b', x: number, y: number): number[] {
+  const grid = x % 64 === 0 || y % 64 === 0 ? 60 : 0;
+  const r = kind === 'r' ? 120 + ((x * 7) % 120) : 30 + grid;
+  const g = 40 + ((y * 5) % 140);
+  const b = kind === 'b' ? 120 + ((x * 7) % 120) : 30 + grid;
+  return [r, g, b, 255];
+}
+
+/** 在标记周围搜索黄色取样标记像素（无头 dpr=1，按 CSS 坐标读） */
+async function findMarker(page: Page, cx: number, cy: number, radius = 14) {
+  return page.evaluate(
+    ({ x0, y0, r }) => {
+      const c = document.querySelector('canvas')!;
+      const ctx = c.getContext('2d')!;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const x = Math.round(x0 + dx);
+          const y = Math.round(y0 + dy);
+          if (x < 0 || y < 0 || x >= c.width || y >= c.height) continue;
+          const d = Array.from(ctx.getImageData(x, y, 1, 1).data);
+          // 标记黄 #ffd400（容差）
+          if (d[0] > 230 && d[1] > 190 && d[1] < 230 && d[2] < 60 && d[3] > 200) {
+            return { x, y };
+          }
+        }
+      }
+      return null;
+    },
+    { x0: cx, y0: cy, r: radius },
+  );
+}
+
+test('像素取样：开启后点击画布显示两组 RGBA、通道差、坐标并标出取样点', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  // 1× 初始视口中心为图像中心 (800,600)，原图坐标 = 中心 + (CSS − 画布中心)
+  const css = { x: 200, y: 100 };
+  const ix = 800 + Math.round(css.x - box.width / 2);
+  const iy = 600 + Math.round(css.y - box.height / 2);
+
+  // 未开启取样时不存在结果区
+  await expect(page.locator('[data-testid="sample-readout"]')).toHaveCount(0);
+
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  await page.mouse.click(box.x + css.x, box.y + css.y);
+
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText(`(${ix}, ${iy})`);
+  await expect(page.locator('[data-testid="sample-before"]')).toHaveText(
+    `(${bigPixel('r', ix, iy).join(', ')})`,
+  );
+  await expect(page.locator('[data-testid="sample-after"]')).toHaveText(
+    `(${bigPixel('b', ix, iy).join(', ')})`,
+  );
+  const pb = bigPixel('r', ix, iy);
+  const pa = bigPixel('b', ix, iy);
+  const diff = pb.map((v, i) => Math.abs(v - pa[i]));
+  await expect(page.locator('[data-testid="sample-diff"]')).toHaveText(
+    `Δ(${diff[0]}, ${diff[1]}, ${diff[2]}, ${diff[3]})`,
+  );
+  await expect(page.locator('[data-testid="sample-notice"]')).toHaveCount(0);
+
+  // 画布上在点击处标出取样点
+  const marker = await findMarker(page, css.x, css.y);
+  expect(marker).not.toBeNull();
+
+  // 取样模式下普通左键不移动分界
+  await expect(page.locator(labels.divider)).toHaveText(`${Math.round(box.width / 2)} px`);
+});
+
+test('像素取样：缩放与平移后原图坐标不变，标记只移动屏幕位置', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  // 取一个在 4× 下仍会落在画布内的原图点：点击画布中心（1× → 图像中心）
+  const cx = Math.round(box.width / 2);
+  const cy = Math.round(box.height / 2);
+  const [ix, iy] = [800, 600];
+  await page.mouse.click(box.x + cx, box.y + cy);
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText(`(${ix}, ${iy})`);
+  expect(await findMarker(page, cx, cy)).not.toBeNull();
+
+  // 4×：视口仍以图像中心为中心，该原图点仍在画布中心；坐标不变
+  await page.locator('[data-testid="zoom-4"]').click();
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText(`(${ix}, ${iy})`);
+  expect(await findMarker(page, cx, cy)).not.toBeNull();
+
+  // 空格平移 100 CSS（4× → 25 原图）：标记屏幕位置随之移动 100px，坐标读数仍不变
+  await page.keyboard.down(' ');
+  await page.mouse.move(box.x + cx, box.y + cy);
+  await page.mouse.down();
+  await page.mouse.move(box.x + cx + 100, box.y + cy, { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.up(' ');
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText(`(${ix}, ${iy})`);
+  // 视口中心左移 25 原图 → 标记（原图点固定）在屏幕上右移 100 CSS
+  expect(await findMarker(page, cx, cy)).toBeNull();
+  expect(await findMarker(page, cx + 100, cy)).not.toBeNull();
+  // 像素读数与该原图坐标一致（未重新取样也保持）
+  await expect(page.locator('[data-testid="sample-before"]')).toHaveText(
+    `(${bigPixel('r', ix, iy).join(', ')})`,
+  );
+});
+
+test('像素取样：退出模式后原有拖分界/方向键行为保持不变', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  const midY = box.y + box.height / 2;
+
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  await page.mouse.click(box.x + 250, midY);
+  await expect(page.locator(labels.divider)).toHaveText(`${Math.round(box.width / 2)} px`);
+
+  // 退出取样模式
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  await expect(page.locator('[data-testid="sample-readout"]')).toHaveCount(0);
+
+  // 拖动恢复移动分界
+  await page.mouse.move(box.x + 300, midY);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 320, midY, { steps: 3 });
+  await page.mouse.up();
+  await expect(page.locator(labels.divider)).toHaveText('320 px');
+
+  // 方向键仍可用
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator(labels.divider)).toHaveText('321 px');
+});
+
+test('像素取样：小图留白点击提示无像素并保留上一次有效结果', async ({ page }) => {
+  await loadPair(page, 'small-before.png', 'small-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-sampling"]').click();
+
+  // 小图 120×90 居中：1× 下图矩形 x∈[box.w/2-60, +120)，点击图像内部
+  const imgCssX = Math.round(box.width / 2);
+  const imgCssY = Math.round(box.height / 2);
+  await page.mouse.click(box.x + imgCssX, box.y + imgCssY);
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText('(60, 45)');
+  const validBefore = await page.locator('[data-testid="sample-before"]').textContent();
+  expect(validBefore).toBeTruthy();
+
+  // 点击左上角留白
+  await page.mouse.click(box.x + 5, box.y + 5);
+  await expect(page.locator('[data-testid="sample-notice"]')).toHaveText('此处无图像像素');
+  // 上一次有效结果保留
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText('(60, 45)');
+  await expect(page.locator('[data-testid="sample-before"]')).toHaveText(validBefore);
+});
+
+test('像素取样：载入新的有效同尺寸单侧图后按原坐标重新取样', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  const css = { x: 200, y: 100 };
+  const ix = 800 + Math.round(css.x - box.width / 2);
+  const iy = 600 + Math.round(css.y - box.height / 2);
+  await page.mouse.click(box.x + css.x, box.y + css.y);
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText(`(${ix}, ${iy})`);
+
+  // 用同尺寸的修复后图替换修复前槽位：两槽同为 blue 图案，差值应全部归零
+  await page.setInputFiles('[data-testid="input-before"]', FIX('big-after.png'));
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText(`(${ix}, ${iy})`);
+  await expect(page.locator('[data-testid="sample-before"]')).toHaveText(
+    `(${bigPixel('b', ix, iy).join(', ')})`,
+  );
+  await expect(page.locator('[data-testid="sample-diff"]')).toHaveText('Δ(0, 0, 0, 0)');
+});
+
+test('像素取样：文件校验失败仍保留影像、视口与取样', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="zoom-2"]').click();
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  await page.mouse.click(box.x + 200, box.y + 100);
+  await expect(page.locator('[data-testid="sample-coord"]')).not.toHaveText('—');
+
+  // 载入损坏文件：错误隔离，取样结果与视口不动
+  await page.setInputFiles('[data-testid="input-before"]', FIX('corrupt.png'));
+  await expect(page.locator('[data-testid="error-before"]')).toContainText('损坏');
+  await expect(page.locator('[data-testid="sample-coord"]')).not.toHaveText('—');
+  await expect(page.locator(labels.zoom)).toHaveText('2×');
+  const px = await readPixel(page, 10, Math.round(box.height / 2));
+  expect(px[3]).toBe(255);
+});
