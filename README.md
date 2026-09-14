@@ -54,6 +54,18 @@
 - **状态栏**：实时显示倍率、分界像素、视口中心原图坐标；取样模式下承接取样
   坐标、两组 RGBA、通道差与留白/越界反馈；测距模式下承接水平差 / 垂直差 /
   欧氏长度、两端原图坐标与留白反馈。
+- **视图书签**：核验大壁画时可将当前构图存为一枚书签——只记录归一化视口
+  中心（中心原图坐标 / 图像天然宽高）、倍率（1/2/4）与分界占画布宽度的
+  比例，**不保存图像字节、取样、测距或显影结果**。记录以固定字段 JSON
+  （`cx` / `cy` / `zoom` / `divider`）经固定键存入浏览器本地存储；再次打开
+  页面并载入任意一对有效同尺寸影像后，点击「恢复视图」即按当前影像天然
+  尺寸与画布尺寸反算中心与分界，再复用现有钳制规则得到无留白的合法视口。
+  App 负责书签可用性（无记录时恢复按钮禁用）与操作反馈；校验 / 归一化 /
+  反算 / 钳制均为纯函数。
+  - 存储不可写：保存失败并提示「视图书签保存失败」，当前画面与已有记录不变；
+  - 记录缺字段、数值非有限或倍率非法：恢复失败并提示「视图书签已损坏」，
+    影像、视口与各工具状态一律不变；
+  - 旧用户没有书签：页面与现有流程完全一致；单侧文件校验失败也不触碰书签。
 - **错误隔离**：损坏 / 非目标格式 / 异尺寸的新文件会指明原因，
   上一组有效影像与视口完整保留。
 
@@ -71,8 +83,8 @@ npm run dev        # http://localhost:5173
 ## 测试与验收
 
 ```bash
-npm run test:unit  # Vitest：视口坐标/分界、取样取整/留白/通道差、测距生命周期/两位小数距离、差异阈值/RGB判定/蒙版字节
-npm run test:e2e   # Playwright：载入与交互、取样显示与标记、两点落尺/视口变化/退出后回归、差异显影对齐/替换重算/失败反馈（自动生成 PNG 夹具）
+npm run test:unit  # Vitest：视口坐标/分界、取样取整/留白/通道差、测距生命周期/两位小数距离、差异阈值/RGB判定/蒙版字节、书签归一化往返/跨尺寸恢复/非法记录拒绝
+npm run test:e2e   # Playwright：载入与交互、取样显示与标记、两点落尺/视口变化/退出后回归、差异显影对齐/替换重算/失败反馈、书签保存/刷新后恢复/失败状态不变（自动生成 PNG 夹具）
 npm run verify     # 一次性验收：单测 + 构建 + e2e
 ```
 
@@ -147,6 +159,23 @@ docker compose up --build --exit-code-from verify verify
 
 全部阈值边界 / RGB 判定 / 蒙版字节均为纯函数，由 `tests/diff.test.ts` 覆盖。
 
+## 视图书签（src/core/bookmark.ts）
+
+- 记录只含视图几何：`cx` / `cy`（归一化视口中心，钳到 [0,1]）、`zoom`
+  （1/2/4）、`divider`（分界 / 画布 CSS 宽度，钳到 [0,1]）；
+  `clampRatio` 把非有限输入回落为 0，保证记录始终可序列化。
+- `serializeBookmark` 输出键序固定的 JSON；`parseBookmark` 校验固定字段：
+  非 JSON、缺字段、字段非有限数值、倍率非 1/2/4 一律拒绝（返回 null），
+  固定字段之外的多余字段被忽略；越界比例不视为损坏，交由钳制规则处理。
+- `resolveBookmarkView` 按当前影像天然尺寸与画布尺寸反算：
+  中心 = 归一化坐标 × 图像宽高，分界 = 比例 × 画布宽度，
+  再复用 `clampCenter` / `clampDivider` 得到无留白的合法视口。
+- App 持有可用性（挂载时按固定键探测本地存储）与保存 / 恢复反馈；
+  存储读写失败、记录损坏均不改变影像、视口与取样 / 测距 / 显影状态。
+
+全部归一化往返 / 跨尺寸恢复 / 非法记录拒绝均为纯函数，由
+`tests/bookmark.test.ts` 覆盖。
+
 ## 目录结构
 
 ```
@@ -154,15 +183,18 @@ src/core/viewport.ts      视口/分界坐标纯函数
 src/core/sample.ts        取样坐标换算、留白/越界判定、通道差纯函数
 src/core/ruler.ts         测距生命周期、两点距离（两位小数）纯函数
 src/core/diff.ts          差异阈值钳制、RGB 命中判定、蒙版字节纯函数
+src/core/bookmark.ts      视图书签校验、归一化、反算与钳制纯函数
 src/core/loadImage.ts     魔数嗅探 + 解码校验
 src/components/CompareCanvas.tsx  Canvas 渲染、模式化指针交互、像素读取、差异蒙版缓存与标记/尺线
-src/App.tsx               影像状态机、视口/取样/测距/差异显影状态、状态栏
+src/App.tsx               影像状态机、视口/取样/测距/差异显影/书签状态、状态栏
 tests/viewport.test.ts    视口 Vitest 单测
 tests/sample.test.ts      取样 Vitest 单测
 tests/ruler.test.ts       测距 Vitest 单测
 tests/diff.test.ts        差异显影 Vitest 单测
+tests/bookmark.test.ts    视图书签 Vitest 单测
 e2e/compare.spec.ts       擦镜/取样/测距 Playwright 端到端
 e2e/diff.spec.ts          差异显影 Playwright 端到端
+e2e/bookmark.spec.ts      视图书签 Playwright 端到端
 scripts/make-fixtures.mjs 纯 Node PNG 夹具生成器
 Dockerfile                deps → build → web(nginx) / verify
 docker-compose.yml        web（WEB_PORT 可覆盖）+ verify（一次性验收）

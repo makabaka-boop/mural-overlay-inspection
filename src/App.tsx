@@ -20,6 +20,13 @@ import {
   DIFF_THRESHOLD_MIN,
   clampThreshold,
 } from './core/diff';
+import {
+  BOOKMARK_STORAGE_KEY,
+  bookmarkFromView,
+  parseBookmark,
+  resolveBookmarkView,
+  serializeBookmark,
+} from './core/bookmark';
 import { CompareCanvas } from './components/CompareCanvas';
 
 type Slot = 'before' | 'after';
@@ -80,6 +87,21 @@ export function App() {
   const [diffThreshold, setDiffThreshold] = useState(DIFF_THRESHOLD_DEFAULT);
   const [diffError, setDiffError] = useState<string | null>(null);
 
+  // 视图书签：App 负责可用性与操作反馈，记录本身只含归一化中心/倍率/分界
+  // 比例（固定字段 JSON，固定键存储）。可用性 = 本地存储中已存在记录，
+  // 挂载时探测一次（旧用户无记录则恢复按钮保持禁用，流程与之前完全一致）。
+  const [bookmarkAvailable, setBookmarkAvailable] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(BOOKMARK_STORAGE_KEY) !== null;
+    } catch {
+      return false;
+    }
+  });
+  const [bookmarkNotice, setBookmarkNotice] = useState<{
+    kind: 'ok' | 'error';
+    text: string;
+  } | null>(null);
+
   const pairSize = useMemo(() => pairOf(images), [images]);
 
   // 取样与测距为两种互斥的左键工具
@@ -108,6 +130,53 @@ export function App() {
   const handleDiffError = useCallback(() => {
     setDiffEnabled(false);
     setDiffError('差异显影生成失败');
+  }, []);
+
+  // 保存视图书签：仅归一化中心/倍率/分界比例入记录。
+  // 存储不可写时保存失败并提示，当前画面与已有记录均不受影响。
+  const handleSaveBookmark = useCallback(() => {
+    const pair = pairOf(imagesRef.current);
+    const canvas = canvasSizeRef.current;
+    if (!pair || canvas.width <= 0) return;
+    const record = bookmarkFromView(center, pair, canvas, zoomRef.current, divider);
+    try {
+      window.localStorage.setItem(BOOKMARK_STORAGE_KEY, serializeBookmark(record));
+    } catch {
+      setBookmarkNotice({ kind: 'error', text: '视图书签保存失败' });
+      return;
+    }
+    setBookmarkAvailable(true);
+    setBookmarkNotice({ kind: 'ok', text: '视图书签已保存' });
+  }, [center, divider]);
+
+  // 恢复视图：按当前影像天然尺寸与画布尺寸反算中心与分界，再经现有钳制
+  // 规则得到合法视口。记录缺字段/数值非有限/倍率非法时提示损坏，
+  // 影像、视口与各工具状态一律不变。
+  const handleRestoreBookmark = useCallback(() => {
+    const pair = pairOf(imagesRef.current);
+    if (!pair) return;
+    let raw: string | null = null;
+    try {
+      raw = window.localStorage.getItem(BOOKMARK_STORAGE_KEY);
+    } catch {
+      raw = null;
+    }
+    if (raw === null) {
+      // 无记录时按钮本不可点；此处仅同步可用性，不产生反馈
+      setBookmarkAvailable(false);
+      return;
+    }
+    const record = parseBookmark(raw);
+    if (!record) {
+      setBookmarkNotice({ kind: 'error', text: '视图书签已损坏' });
+      return;
+    }
+    const view = resolveBookmarkView(record, pair, canvasSizeRef.current);
+    zoomRef.current = view.zoom;
+    setZoom(view.zoom);
+    setCenter(view.center);
+    setDivider(view.divider);
+    setBookmarkNotice({ kind: 'ok', text: '视图已恢复' });
   }, []);
 
   // 测距尺点击由 CompareCanvas 通过专用回调提交：
@@ -277,6 +346,24 @@ export function App() {
             </button>
           ))}
         </div>
+        <div className="bookmark-group" role="group" aria-label="视图书签">
+          <button
+            type="button"
+            data-testid="save-bookmark"
+            disabled={!pairSize}
+            onClick={handleSaveBookmark}
+          >
+            保存视图
+          </button>
+          <button
+            type="button"
+            data-testid="restore-bookmark"
+            disabled={!pairSize || !bookmarkAvailable}
+            onClick={handleRestoreBookmark}
+          >
+            恢复视图
+          </button>
+        </div>
       </header>
 
       <main className="stage">
@@ -390,6 +477,17 @@ export function App() {
         {ranging && ruler.notice && (
           <span className="ruler-notice" role="status" data-testid="ruler-notice">
             {ruler.notice}
+          </span>
+        )}
+        {bookmarkNotice && (
+          <span
+            className={
+              bookmarkNotice.kind === 'error' ? 'bookmark-notice error' : 'bookmark-notice'
+            }
+            role="status"
+            data-testid="bookmark-notice"
+          >
+            {bookmarkNotice.text}
           </span>
         )}
         <span className="hint">

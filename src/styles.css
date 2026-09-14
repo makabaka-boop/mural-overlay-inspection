@@ -232,6 +232,27 @@ body {
   cursor: default;
 }
 
+.bookmark-group {
+  display: flex;
+  gap: 6px;
+}
+
+.bookmark-group button {
+  padding: 5px 12px;
+  border: 1px solid #3a3e4c;
+  border-radius: 5px;
+  background: #23252e;
+  color: #cfd3da;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.bookmark-group button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .stage {
   flex: 1;
   min-height: 0;
@@ -307,6 +328,16 @@ body {
   font-size: 12px;
   color: #27e6e6;
   white-space: nowrap;
+}
+
+.bookmark-notice {
+  font-size: 12px;
+  color: #8ec6ff;
+  white-space: nowrap;
+}
+
+.bookmark-notice.error {
+  color: #ff7b72;
 }
 
 .statusbar .hint {

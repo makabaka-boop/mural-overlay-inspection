@@ -137,6 +137,9 @@ function writeDiffPair() {
 // 大图像对（大于画布，可平移）
 writePng('big-before.png', 1600, 1200, 'r');
 writePng('big-after.png', 1600, 1200, 'b');
+// 中尺寸图像对（视图书签跨尺寸恢复：2× 下两轴仍可平移）
+writePng('mid-before.png', 800, 600, 'r');
+writePng('mid-after.png', 800, 600, 'b');
 // 小图像对（小于视口，两轴固定居中）
 writePng('small-before.png', 120, 90, 'r');
 writePng('small-after.png', 120, 90, 'b');
