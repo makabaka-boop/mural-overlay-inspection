@@ -99,10 +99,9 @@ export function App() {
   }, []);
 
   const handleDiffThreshold = useCallback((value: number) => {
-    const t = clampThreshold(value);
-    setDiffThreshold(t);
-    // 调节阈值会在启用时重算蒙版，旧的生成失败提示随之清除
-    setDiffError(null);
+    setDiffThreshold(clampThreshold(value));
+    // 生成失败后显影已自动关闭，调阈值不会触发重算：失败提示必须保留，
+    // 直至重新开启并成功生成（见 toggleDiff / handleDiffError）
   }, []);
 
   // 蒙版无法读取像素或分配：自动关闭显影并提示，影像/视口/工具状态一律保留

@@ -274,6 +274,11 @@ test.describe('差异显影', () => {
     await expect(page.locator('[data-testid="divider-label"]')).toHaveText('400 px');
     await expect(page.locator('[data-testid="meta-before"]')).toContainText('diff-before.png');
 
+    // 失败后调节灵敏度：显影仍关闭，失败提示持续说明，直至重新生成成功
+    await setThreshold(page, 10);
+    await expect(page.locator('[data-testid="diff-error"]')).toHaveText('差异显影生成失败');
+    await expect(toggleDiff(page)).toHaveAttribute('aria-pressed', 'false');
+
     // 恢复读取能力后重新开启：蒙版成功生成，失败提示清除
     await page.reload();
     await loadPair(page, 'diff-before.png', 'diff-after.png');

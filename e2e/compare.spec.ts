@@ -159,6 +159,56 @@ test('平移按轴钳制不露白，图像小于视口的轴固定居中', async
   await expect(page.locator(labels.center)).toHaveText(`(${1600 - minX}, ${1200 - minY})`);
 });
 
+test('按住空格切出窗口并在外部松开：返回后左拖恢复移动分界', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  const midY = box.y + box.height / 2;
+
+  // 按住空格后切出窗口：松开发生在窗外，画布收不到 keyup
+  await page.keyboard.down(' ');
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  // （空格在窗外松开，不向页面派发 keyup）
+
+  // 返回画布左拖：应移动分界而非平移视口
+  await page.mouse.move(box.x + box.width / 2, midY);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 320, midY, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.locator(labels.divider)).toHaveText('320 px');
+  await expect(page.locator(labels.center)).toHaveText('(800, 600)');
+});
+
+test('拖动分界期间指针捕获意外丢失：立即结束本次拖动', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  const midY = box.y + box.height / 2;
+
+  // 开始拖动分界
+  await page.mouse.move(box.x + box.width / 2, midY);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 400, midY, { steps: 3 });
+  await expect(page.locator(labels.divider)).toHaveText('400 px');
+
+  // 指针捕获意外丢失（系统级）：本次拖动应立即结束
+  await page.evaluate(() => {
+    document
+      .querySelector('canvas')!
+      .dispatchEvent(new PointerEvent('lostpointercapture', { bubbles: true }));
+  });
+
+  // 随后未按键移动不再改变分界
+  await page.mouse.move(box.x + 200, midY, { steps: 3 });
+  await expect(page.locator(labels.divider)).toHaveText('400 px');
+  await page.mouse.up();
+
+  // 新一轮拖动不受影响
+  await page.mouse.move(box.x + 300, midY);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 320, midY, { steps: 3 });
+  await page.mouse.up();
+  await expect(page.locator(labels.divider)).toHaveText('320 px');
+});
+
 test('小图像两轴固定居中，平移无效', async ({ page }) => {
   await loadPair(page, 'small-before.png', 'small-after.png');
   await expect(page.locator(labels.center)).toHaveText('(60, 45)');

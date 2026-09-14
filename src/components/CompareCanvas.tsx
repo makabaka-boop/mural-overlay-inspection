@@ -156,11 +156,18 @@ export function CompareCanvas(props: Props) {
     const up = (e: KeyboardEvent) => {
       if (e.code === 'Space') spaceHeld.current = false;
     };
+    // 按住空格切出窗口后，松开发生在窗外、keyup 丢失：
+    // 窗口失焦即视为已松开，避免返回画布后左拖误触发平移
+    const blur = () => {
+      spaceHeld.current = false;
+    };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
+    window.addEventListener('blur', blur);
     return () => {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
     };
   }, []);
 
@@ -537,6 +544,8 @@ export function CompareCanvas(props: Props) {
     }
   };
 
+  // 拖动会话收尾：pointerup / pointercancel 之外，捕获意外丢失
+  // （lostpointercapture）也必须立即结束，否则后续无按键移动仍会继续拖动
   const endDrag = () => {
     dragMode.current = null;
   };
@@ -564,6 +573,7 @@ export function CompareCanvas(props: Props) {
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
         onContextMenu={(e) => e.preventDefault()}
         onKeyDown={onKeyDown}
       />
