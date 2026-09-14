@@ -26,6 +26,40 @@ import {
   rulerBlankNotice,
   type RulerState,
 } from '../core/ruler';
+import { buildDiffMask } from '../core/diff';
+
+/**
+ * 读取整幅修复前/后位图的 RGBA 字节，按阈值生成差异蒙版并送入与原图
+ * 同尺寸的离屏画布。浏览器无法读取像素（getImageData 抛错）或无法分配
+ * 蒙版/画布时异常向上抛出，由调用方关闭显影并反馈失败。
+ */
+function buildDiffMaskCanvas(
+  before: LoadedImage,
+  after: LoadedImage,
+  width: number,
+  height: number,
+  threshold: number,
+): HTMLCanvasElement {
+  const src = document.createElement('canvas');
+  src.width = width;
+  src.height = height;
+  const sctx = src.getContext('2d', { willReadFrequently: true });
+  if (!sctx) throw new Error('diff mask: 2d context unavailable');
+  sctx.imageSmoothingEnabled = false;
+  sctx.drawImage(before.bitmap, 0, 0);
+  const beforeData = sctx.getImageData(0, 0, width, height).data;
+  sctx.clearRect(0, 0, width, height);
+  sctx.drawImage(after.bitmap, 0, 0);
+  const afterData = sctx.getImageData(0, 0, width, height).data;
+  const bytes = buildDiffMask(beforeData, afterData, width, height, threshold);
+  const out = document.createElement('canvas');
+  out.width = width;
+  out.height = height;
+  const octx = out.getContext('2d');
+  if (!octx) throw new Error('diff mask: output 2d context unavailable');
+  octx.putImageData(new ImageData(bytes, width, height), 0, 0);
+  return out;
+}
 
 interface Props {
   before: LoadedImage | null;
@@ -42,12 +76,18 @@ interface Props {
   ranging: boolean;
   /** 测距尺生命周期状态（端点为原图坐标） */
   ruler: RulerState;
+  /** 差异显影开关（纯视觉叠加，不接管指针） */
+  diffEnabled: boolean;
+  /** 差异显影灵敏度阈值 0–255（RGB 最大绝对差严格大于即命中） */
+  diffThreshold: number;
   onCenterChange: (center: Point) => void;
   onDividerChange: (divider: number) => void;
   onCanvasSize: (size: Size) => void;
   onSample: (result: SampleResult) => void;
   /** 测距专用回调：提交一次点击推进后的完整尺状态 */
   onRuler: (state: RulerState) => void;
+  /** 差异蒙版无法读取像素或分配时回调：App 据此关闭显影并提示 */
+  onDiffError: () => void;
 }
 
 export function CompareCanvas(props: Props) {
@@ -62,11 +102,14 @@ export function CompareCanvas(props: Props) {
     samplePoint,
     ranging,
     ruler,
+    diffEnabled,
+    diffThreshold,
     onCenterChange,
     onDividerChange,
     onCanvasSize,
     onSample,
     onRuler,
+    onDiffError,
   } = props;
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -142,6 +185,17 @@ export function CompareCanvas(props: Props) {
     before: null,
     after: null,
   });
+
+  // 差异显影蒙版缓存：以两槽位图引用 + 阈值为键，视口变换（缩放/平移/分界）
+  // 不重建蒙版；单侧同尺寸替换会更换位图引用，缓存未命中即按新影像重算。
+  const diffMaskCache = useRef<{
+    before: ImageBitmap;
+    after: ImageBitmap;
+    threshold: number;
+    width: number;
+    height: number;
+    canvas: HTMLCanvasElement;
+  } | null>(null);
 
   // 在原图整数坐标处读取单像素 RGBA（离屏 1×1 画布，受 imageSmoothing 影响为否）
   const readPixel = (img: LoadedImage, point: SamplePoint): PixelRGBA | null => {
@@ -239,6 +293,60 @@ export function CompareCanvas(props: Props) {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
     ctx.fillRect(divider - 0.5, 0, 1, cssSize.height);
 
+    // 差异显影：半透明洋红蒙版按原图位置叠加在底图之上、取样/测距标记之下。
+    // 蒙版与原图同尺寸并按同一 blit 重绘，故缩放/平移/拖动分界后仍逐点对齐；
+    // 显影不接管指针，分界拖动与平移照常可用。
+    if (diffEnabled) {
+      const cache = diffMaskCache.current;
+      let maskCanvas: HTMLCanvasElement | null = null;
+      if (
+        cache &&
+        cache.before === before.bitmap &&
+        cache.after === after.bitmap &&
+        cache.threshold === diffThreshold &&
+        cache.width === imageSize.width &&
+        cache.height === imageSize.height
+      ) {
+        maskCanvas = cache.canvas;
+      } else {
+        try {
+          maskCanvas = buildDiffMaskCanvas(
+            before,
+            after,
+            imageSize.width,
+            imageSize.height,
+            diffThreshold,
+          );
+          diffMaskCache.current = {
+            before: before.bitmap,
+            after: after.bitmap,
+            threshold: diffThreshold,
+            width: imageSize.width,
+            height: imageSize.height,
+            canvas: maskCanvas,
+          };
+        } catch {
+          // 无法读取像素或分配蒙版：自动关闭显影并反馈，影像/视口/工具状态不动
+          diffMaskCache.current = null;
+          onDiffError();
+          maskCanvas = null;
+        }
+      }
+      if (maskCanvas) {
+        ctx.drawImage(
+          maskCanvas,
+          blit.sx,
+          blit.sy,
+          blit.sw,
+          blit.sh,
+          blit.dx,
+          blit.dy,
+          blit.dw,
+          blit.dh,
+        );
+      }
+    }
+
     // 取样点标记：缩放/平移只移动其屏幕位置，原图坐标不变；退出取样模式即隐藏
     if (sampling && samplePoint) {
       const pos = samplePointToCss(samplePoint, center, cssSize, zoom);
@@ -328,6 +436,9 @@ export function CompareCanvas(props: Props) {
     samplePoint,
     ranging,
     ruler,
+    diffEnabled,
+    diffThreshold,
+    onDiffError,
   ]);
 
   const setDividerFromPointer = (clientX: number) => {

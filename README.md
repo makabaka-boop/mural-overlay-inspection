@@ -39,6 +39,18 @@
   - 退出测距模式只隐藏尺线与读数，最近一次完成结果保留，重进即恢复显示；
   - 载入新的有效同尺寸单侧图后继续使用原测量坐标；
   - 测距与取样为互斥的两种左键工具；文件校验失败仍保留影像、视口与测量。
+- **差异显影**：文保人员完成擦镜定位后可开启「差异显影」，整幅壁画中修复前后
+  同坐标 **RGB 三通道最大绝对差严格大于灵敏度阈值（0–255）** 的像素以半透明洋红
+  （`rgba(255,0,255,0.5)`）蒙版叠加；底图仍按当前分界左右显示，蒙版横跨分界、
+  逐点对齐。工具栏仅保留一个开关与一个 0–255 滑杆；启用状态与阈值由 App 持有，
+  命中判定与蒙版字节均为纯函数。蒙版与原图同尺寸并按原图位置缓存，视口缩放 /
+  平移 / 拖分界后以同一 blit 重绘，不重建也不错位；显影为纯视觉叠加、**不接管
+  指针**，分界拖动、空格 / 中键平移、缩放照常可用，取样标记与测距尺绘制在蒙版
+  之上。
+  - 载入有效图像对后才能开启；调节阈值时蒙版确定性增减（阈值升高只减不增）；
+  - 单侧同尺寸替换更换位图引用，缓存未命中即按新影像重算（两槽相同则蒙版全空）；
+  - 浏览器无法读取像素（`getImageData` 抛错）或无法分配蒙版 / 画布时，自动关闭
+    显影并提示「差异显影生成失败」，已载影像、视口与取样 / 测距等工具状态完整保留。
 - **状态栏**：实时显示倍率、分界像素、视口中心原图坐标；取样模式下承接取样
   坐标、两组 RGBA、通道差与留白/越界反馈；测距模式下承接水平差 / 垂直差 /
   欧氏长度、两端原图坐标与留白反馈。
@@ -59,8 +71,8 @@ npm run dev        # http://localhost:5173
 ## 测试与验收
 
 ```bash
-npm run test:unit  # Vitest：视口坐标/分界、取样取整/留白/通道差、测距生命周期/两位小数距离
-npm run test:e2e   # Playwright：载入与交互、取样显示与标记、两点落尺/视口变化/退出后回归（自动生成 PNG 夹具）
+npm run test:unit  # Vitest：视口坐标/分界、取样取整/留白/通道差、测距生命周期/两位小数距离、差异阈值/RGB判定/蒙版字节
+npm run test:e2e   # Playwright：载入与交互、取样显示与标记、两点落尺/视口变化/退出后回归、差异显影对齐/替换重算/失败反馈（自动生成 PNG 夹具）
 npm run verify     # 一次性验收：单测 + 构建 + e2e
 ```
 
@@ -120,19 +132,37 @@ docker compose up --build --exit-code-from verify verify
 
 全部生命周期推进/距离/留白保持均为纯函数，由 `tests/ruler.test.ts` 覆盖。
 
+## 差异显影（src/core/diff.ts）
+
+- 命中判定 `isDiffPixel`：取修复前后同坐标像素的 R/G/B 三通道绝对差最大值，
+  **严格大于**阈值即命中（差恰等于阈值不命中；alpha 通道不参与）。
+- `clampThreshold` 把任意输入钳为 0–255 的整数（`NaN`/`Infinity` 回落默认 32）。
+- `buildDiffMask` 输出与原图同尺寸的 RGBA 字节蒙版：命中像素写入半透明洋红
+  `(255,0,255,128)`，未命中像素全 0；结果确定，阈值单调（升高只减不增）。
+- App 持有启用状态与阈值；`CompareCanvas` 以「两槽位图引用 + 阈值 + 尺寸」为键
+  缓存离屏蒙版画布，视口变换（缩放 / 平移 / 分界）仅按同一 blit 重绘、不重建；
+  单侧同尺寸替换因位图引用更换而缓存失效、按新影像重算。读取像素或分配失败时
+  经 `onDiffError` 回调关闭显影并提示「差异显影生成失败」，影像 / 视口 / 工具状态
+  不动。蒙版叠在底图（含分界）之上、取样标记与测距尺之下，且不接管任何指针。
+
+全部阈值边界 / RGB 判定 / 蒙版字节均为纯函数，由 `tests/diff.test.ts` 覆盖。
+
 ## 目录结构
 
 ```
 src/core/viewport.ts      视口/分界坐标纯函数
 src/core/sample.ts        取样坐标换算、留白/越界判定、通道差纯函数
 src/core/ruler.ts         测距生命周期、两点距离（两位小数）纯函数
+src/core/diff.ts          差异阈值钳制、RGB 命中判定、蒙版字节纯函数
 src/core/loadImage.ts     魔数嗅探 + 解码校验
-src/components/CompareCanvas.tsx  Canvas 渲染、模式化指针交互、像素读取与标记/尺线
-src/App.tsx               影像状态机、视口/取样/测距状态、状态栏
+src/components/CompareCanvas.tsx  Canvas 渲染、模式化指针交互、像素读取、差异蒙版缓存与标记/尺线
+src/App.tsx               影像状态机、视口/取样/测距/差异显影状态、状态栏
 tests/viewport.test.ts    视口 Vitest 单测
 tests/sample.test.ts      取样 Vitest 单测
 tests/ruler.test.ts       测距 Vitest 单测
-e2e/compare.spec.ts       Playwright 端到端
+tests/diff.test.ts        差异显影 Vitest 单测
+e2e/compare.spec.ts       擦镜/取样/测距 Playwright 端到端
+e2e/diff.spec.ts          差异显影 Playwright 端到端
 scripts/make-fixtures.mjs 纯 Node PNG 夹具生成器
 Dockerfile                deps → build → web(nginx) / verify
 docker-compose.yml        web（WEB_PORT 可覆盖）+ verify（一次性验收）

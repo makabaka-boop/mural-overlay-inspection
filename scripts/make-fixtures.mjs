@@ -72,6 +72,68 @@ function writePng(name, width, height, hue) {
   fs.writeFileSync(path.join(OUT, name), encodePng(width, height, pattern(width, height, hue)));
 }
 
+/**
+ * 差异显影夹具：中性灰底 (128,128,128) 的修复前图 + 三处已知 RGB 增量块的
+ * 修复后图，供阈值边界与蒙版对齐核验。蒙版命中像素的洋红叠加会显著抬高
+ * R/B 而 G 保持低水平，未命中区域则保持中灰。
+ */
+function writeDiffPair() {
+  const W = 1600;
+  const H = 1200;
+  const BASE = 128;
+  const before = Buffer.alloc(W * H * 4);
+  const after = Buffer.alloc(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      before[i] = after[i] = BASE;
+      before[i + 1] = after[i + 1] = BASE;
+      before[i + 2] = after[i + 2] = BASE;
+      before[i + 3] = after[i + 3] = 255;
+    }
+  }
+  /** 在 after 上叠加一个正方形 RGB 增量块（仅 RGB，alpha 不变） */
+  const deltaBlock = (x0, y0, size, dr, dg, db) => {
+    for (let y = y0; y < y0 + size; y++) {
+      for (let x = x0; x < x0 + size; x++) {
+        const i = (y * W + x) * 4;
+        after[i] = BASE + dr;
+        after[i + 1] = BASE + dg;
+        after[i + 2] = BASE + db;
+      }
+    }
+  };
+  // A: 32×32 块，最大通道差 20（中心原图 (800,560)，4× 平移对齐测试用）
+  deltaBlock(784, 544, 32, 20, 0, 0);
+  // B: 24×24 块，最大通道差 60（中心原图 (500,400)，阈值 30/100 判定用）
+  deltaBlock(488, 388, 24, 60, 0, 0);
+  // C: 3×3 块，R 通道差 128（中心原图 (1100,700)，t<128 命中）
+  for (let y = 699; y <= 701; y++) {
+    for (let x = 1099; x <= 1101; x++) {
+      after[(y * W + x) * 4] = 0;
+    }
+  }
+  fs.writeFileSync(path.join(OUT, 'diff-before.png'), encodePng(W, H, before));
+  fs.writeFileSync(path.join(OUT, 'diff-after.png'), encodePng(W, H, after));
+
+  // 小图差异对：120×90，单一 8×8、差 50 的块，供阈值边界测试
+  const SW = 120;
+  const SH = 90;
+  const sb = Buffer.alloc(SW * SH * 4);
+  const sa = Buffer.alloc(SW * SH * 4);
+  for (let i = 0; i < SW * SH; i++) {
+    sb.set([BASE, BASE, BASE, 255], i * 4);
+    sa.set([BASE, BASE, BASE, 255], i * 4);
+  }
+  for (let y = 40; y < 48; y++) {
+    for (let x = 56; x < 64; x++) {
+      sa[(y * SW + x) * 4] = BASE + 50;
+    }
+  }
+  fs.writeFileSync(path.join(OUT, 'diff-small-before.png'), encodePng(SW, SH, sb));
+  fs.writeFileSync(path.join(OUT, 'diff-small-after.png'), encodePng(SW, SH, sa));
+}
+
 // 大图像对（大于画布，可平移）
 writePng('big-before.png', 1600, 1200, 'r');
 writePng('big-after.png', 1600, 1200, 'b');
@@ -95,5 +157,8 @@ fs.writeFileSync(
   path.join(OUT, 'fake.png'),
   Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00]),
 );
+
+// 差异显影受控夹具（已知增量块/单像素）
+writeDiffPair();
 
 console.log('fixtures written to', OUT);

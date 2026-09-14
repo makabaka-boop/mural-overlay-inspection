@@ -14,6 +14,12 @@ import {
   initialRulerState,
   type RulerState,
 } from './core/ruler';
+import {
+  DIFF_THRESHOLD_DEFAULT,
+  DIFF_THRESHOLD_MAX,
+  DIFF_THRESHOLD_MIN,
+  clampThreshold,
+} from './core/diff';
 import { CompareCanvas } from './components/CompareCanvas';
 
 type Slot = 'before' | 'after';
@@ -68,6 +74,12 @@ export function App() {
   const [ranging, setRanging] = useState(false);
   const [ruler, setRuler] = useState<RulerState>(initialRulerState);
 
+  // 差异显影：App 持有启用状态与 0–255 灵敏度阈值；纯视觉叠加，不与
+  // 取样/测距互斥，也不接管指针。蒙版生成失败由 CompareCanvas 回调上报。
+  const [diffEnabled, setDiffEnabled] = useState(false);
+  const [diffThreshold, setDiffThreshold] = useState(DIFF_THRESHOLD_DEFAULT);
+  const [diffError, setDiffError] = useState<string | null>(null);
+
   const pairSize = useMemo(() => pairOf(images), [images]);
 
   // 取样与测距为两种互斥的左键工具
@@ -78,6 +90,25 @@ export function App() {
   const toggleRanging = useCallback(() => {
     setRanging((v) => !v);
     setSampling(false);
+  }, []);
+
+  const toggleDiff = useCallback(() => {
+    // 手动开关：清除上次生成失败提示，启用状态由 App 持有
+    setDiffError(null);
+    setDiffEnabled((v) => !v);
+  }, []);
+
+  const handleDiffThreshold = useCallback((value: number) => {
+    const t = clampThreshold(value);
+    setDiffThreshold(t);
+    // 调节阈值会在启用时重算蒙版，旧的生成失败提示随之清除
+    setDiffError(null);
+  }, []);
+
+  // 蒙版无法读取像素或分配：自动关闭显影并提示，影像/视口/工具状态一律保留
+  const handleDiffError = useCallback(() => {
+    setDiffEnabled(false);
+    setDiffError('差异显影生成失败');
   }, []);
 
   // 测距尺点击由 CompareCanvas 通过专用回调提交：
@@ -184,11 +215,6 @@ export function App() {
                   ? `${images[slot]!.name}（${images[slot]!.width}×${images[slot]!.height}）`
                   : '未载入'}
               </span>
-              {errors[slot] && (
-                <span className="error" role="alert" data-testid={`error-${slot}`}>
-                  {errors[slot]}
-                </span>
-              )}
             </div>
           ))}
         </div>
@@ -212,6 +238,32 @@ export function App() {
             裂隙测距
           </button>
         </div>
+        <div className="diff-group" role="group" aria-label="差异显影">
+          <button
+            type="button"
+            data-testid="toggle-diff"
+            aria-pressed={diffEnabled}
+            disabled={!pairSize}
+            onClick={toggleDiff}
+          >
+            差异显影
+          </button>
+          <label className="diff-slider">
+            灵敏度
+            <input
+              type="range"
+              min={DIFF_THRESHOLD_MIN}
+              max={DIFF_THRESHOLD_MAX}
+              step={1}
+              value={diffThreshold}
+              disabled={!pairSize}
+              aria-label="差异显影灵敏度阈值（0–255）"
+              data-testid="diff-threshold"
+              onChange={(e) => handleDiffThreshold(Number(e.target.value))}
+            />
+            <strong data-testid="diff-threshold-label">{diffThreshold}</strong>
+          </label>
+        </div>
         <div className="zoom-group" role="group" aria-label="倍率">
           {ZOOM_LEVELS.map((z) => (
             <button
@@ -229,6 +281,27 @@ export function App() {
       </header>
 
       <main className="stage">
+        {/* 错误提示以覆盖层形式浮于画布顶部，不进入布局流，
+            长文案也不会挤压工具栏 / 改变画布尺寸与原图坐标映射 */}
+        {(errors.before || errors.after || diffError) && (
+          <div className="alerts" role="alert" aria-live="assertive">
+            {errors.before && (
+              <span className="alert error" data-testid="error-before">
+                {errors.before}
+              </span>
+            )}
+            {errors.after && (
+              <span className="alert error" data-testid="error-after">
+                {errors.after}
+              </span>
+            )}
+            {diffError && (
+              <span className="alert diff-alert" data-testid="diff-error">
+                {diffError}
+              </span>
+            )}
+          </div>
+        )}
         <CompareCanvas
           before={images.before}
           after={images.after}
@@ -240,11 +313,14 @@ export function App() {
           samplePoint={samplePoint}
           ranging={ranging}
           ruler={ruler}
+          diffEnabled={diffEnabled}
+          diffThreshold={diffThreshold}
           onCenterChange={setCenter}
           onDividerChange={setDivider}
           onCanvasSize={handleCanvasSize}
           onSample={handleSample}
           onRuler={handleRuler}
+          onDiffError={handleDiffError}
         />
       </main>
 
