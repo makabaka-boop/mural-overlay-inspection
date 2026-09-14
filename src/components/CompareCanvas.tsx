@@ -224,8 +224,8 @@ export function CompareCanvas(props: Props) {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
     ctx.fillRect(divider - 0.5, 0, 1, cssSize.height);
 
-    // 取样点标记：缩放/平移只移动其屏幕位置，原图坐标不变
-    if (samplePoint) {
+    // 取样点标记：缩放/平移只移动其屏幕位置，原图坐标不变；退出取样模式即隐藏
+    if (sampling && samplePoint) {
       const pos = samplePointToCss(samplePoint, center, cssSize, zoom);
       // 黄底 + 深色描边的十字圆环，叠在任意底色上都可辨识
       ctx.save();
@@ -249,7 +249,7 @@ export function CompareCanvas(props: Props) {
       ctx.fill();
       ctx.restore();
     }
-  }, [before, after, zoom, center, divider, imageSize, cssSize, samplePoint]);
+  }, [before, after, zoom, center, divider, imageSize, cssSize, sampling, samplePoint]);
 
   const setDividerFromPointer = (clientX: number) => {
     const canvas = canvasRef.current;

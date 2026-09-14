@@ -372,6 +372,66 @@ test('像素取样：小图留白点击提示无像素并保留上一次有效�
   await expect(page.locator('[data-testid="sample-before"]')).toHaveText(validBefore);
 });
 
+test('像素取样：小图右/下边缘内侧点击读取末列/末行像素', async ({ page }) => {
+  await loadPair(page, 'small-before.png', 'small-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-sampling"]').click();
+
+  // 120×90 居中：图矩形右边缘 CSS x = box.width/2 + 60，点击边缘内侧 0.2px 处
+  // → 原图浮点 119.8 → 取整 120 越出边界 → 应钳回末列 119 而非报越界
+  const midX = box.width / 2;
+  const midY = box.height / 2;
+  await page.mouse.click(box.x + midX + 59.8, box.y + midY);
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText('(119, 45)');
+  await expect(page.locator('[data-testid="sample-before"]')).toHaveText(
+    `(${bigPixel('r', 119, 45).join(', ')})`,
+  );
+  await expect(page.locator('[data-testid="sample-after"]')).toHaveText(
+    `(${bigPixel('b', 119, 45).join(', ')})`,
+  );
+  await expect(page.locator('[data-testid="sample-notice"]')).toHaveCount(0);
+
+  // 下边缘内侧同理：原图浮点 89.8 → 钳回末行 89
+  await page.mouse.click(box.x + midX, box.y + midY + 44.8);
+  await expect(page.locator('[data-testid="sample-coord"]')).toHaveText('(60, 89)');
+  await expect(page.locator('[data-testid="sample-before"]')).toHaveText(
+    `(${bigPixel('r', 60, 89).join(', ')})`,
+  );
+  await expect(page.locator('[data-testid="sample-notice"]')).toHaveCount(0);
+});
+
+test('像素取样：退出模式后取样标记隐藏，重新进入恢复显示', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  const css = { x: 200, y: 100 };
+
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  await page.mouse.click(box.x + css.x, box.y + css.y);
+  expect(await findMarker(page, css.x, css.y)).not.toBeNull();
+
+  // 退出取样模式：标记隐藏，取样点状态保留
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  expect(await findMarker(page, css.x, css.y)).toBeNull();
+
+  // 重新进入：标记按原图坐标恢复显示
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  expect(await findMarker(page, css.x, css.y)).not.toBeNull();
+});
+
+test('像素取样：退出模式后留白提示随状态栏取样区一并隐藏', async ({ page }) => {
+  await loadPair(page, 'small-before.png', 'small-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-sampling"]').click();
+
+  // 点击居中留白外的区域（左上角）触发无像素提示
+  await page.mouse.click(box.x + 5, box.y + 5);
+  await expect(page.locator('[data-testid="sample-notice"]')).toHaveText('此处无图像像素');
+
+  // 退出取样模式：提示隐藏
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  await expect(page.locator('[data-testid="sample-notice"]')).toHaveCount(0);
+});
+
 test('像素取样：载入新的有效同尺寸单侧图后按原坐标重新取样', async ({ page }) => {
   await loadPair(page, 'big-before.png', 'big-after.png');
   const box = await canvasBox(page);

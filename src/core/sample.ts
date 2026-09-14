@@ -4,6 +4,8 @@
  * 取样点以「原图整数坐标」保存，与视口/倍率无关：
  * - 画布 CSS 坐标 → 原图坐标：按当前倍率与视口中心反算后四舍五入取整；
  * - 小图居中产生的画布留白视为「无图像像素」，不产生取样点；
+ * - 点击落在图像矩形右/下边缘内侧时，取整可能把坐标推出边界，
+ *   钳回末列/末行像素而非视为越界；
  * - 落在图像外的整数坐标视为越界（尺寸替换等情形下的防御判定）。
  */
 import { computeBlit, type Blit } from './viewport';
@@ -106,10 +108,21 @@ export function isPointInImage(point: SamplePoint, image: Size): boolean {
 }
 
 /**
+ * 整数原图坐标钳制到图像范围内。
+ * 点击已在 blit 矩形内时，四舍五入最多把坐标推出右/下边缘一步，
+ * 钳回末列/末行即为指针实际指向的边缘像素。
+ */
+export function clampPointToImage(point: SamplePoint, image: Size): SamplePoint {
+  return {
+    x: Math.min(Math.max(point.x, 0), image.width - 1),
+    y: Math.min(Math.max(point.y, 0), image.height - 1),
+  };
+}
+
+/**
  * 解析一次画布点击：
  * - 落在小图居中留白：status 'blank'，point null；
- * - 换算得到的整数坐标越过图像边界：status 'out'；
- * - 否则 status 'ok' 并返回原图整数坐标。
+ * - 落在图像矩形内：status 'ok'；四舍五入越出右/下边缘的坐标钳回末列/末行。
  */
 export function resolveSamplePoint(
   css: Point,
@@ -121,10 +134,7 @@ export function resolveSamplePoint(
   if (!isPointInBlit(css, computeBlit(center, image, canvas, zoom))) {
     return { status: 'blank', point: null };
   }
-  const point = samplePointFromCss(css, center, canvas, zoom);
-  if (!isPointInImage(point, image)) {
-    return { status: 'out', point };
-  }
+  const point = clampPointToImage(samplePointFromCss(css, center, canvas, zoom), image);
   return { status: 'ok', point };
 }
 

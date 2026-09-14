@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   blankSampleResult,
   channelDiff,
+  clampPointToImage,
   cssToImage,
   isPointInBlit,
   isPointInImage,
@@ -143,14 +144,25 @@ describe('越界判定', () => {
     expect(isPointInImage({ x: -1, y: 0 }, img)).toBe(false);
   });
 
-  it('resolveSamplePoint：blit 内但整数坐标越过图像边界时返回 out', () => {
-    // 构造恰好落在 blit 内、四舍五入后等于图像右边界的点击
+  it('resolveSamplePoint：右/下边缘内侧取整越界时钳回末列/末行', () => {
+    // 构造恰好落在 blit 内、四舍五入后等于图像边界的点击
     const img = { width: 200, height: 100 };
     const center = { x: 100, y: 50 };
-    // 图像右边缘 CSS x = 500；点击 499.8 → 原图 199.8 → 取整 200 → 越界
+    // 图像右边缘 CSS x = 500；点击 499.8 → 原图 199.8 → 取整 200 → 钳回末列 199
     const r = resolveSamplePoint({ x: 499.8, y: 200 }, center, img, CANVAS, 1);
-    expect(r.status).toBe('out');
-    expect(r.point).toEqual({ x: 200, y: 50 });
+    expect(r.status).toBe('ok');
+    expect(r.point).toEqual({ x: 199, y: 50 });
+    // 下边缘同理：CSS y = 250；点击 249.8 → 原图 99.8 → 取整 100 → 钳回末行 99
+    const r2 = resolveSamplePoint({ x: 400, y: 249.8 }, center, img, CANVAS, 1);
+    expect(r2.status).toBe('ok');
+    expect(r2.point).toEqual({ x: 100, y: 99 });
+  });
+
+  it('clampPointToImage：各轴独立钳到 [0, W-1]×[0, H-1]', () => {
+    const img = { width: 10, height: 8 };
+    expect(clampPointToImage({ x: 10, y: 8 }, img)).toEqual({ x: 9, y: 7 });
+    expect(clampPointToImage({ x: -1, y: 4 }, img)).toEqual({ x: 0, y: 4 });
+    expect(clampPointToImage({ x: 3, y: 5 }, img)).toEqual({ x: 3, y: 5 });
   });
 
   it('outOfBoundsResult 携带坐标与原因并清空像素', () => {

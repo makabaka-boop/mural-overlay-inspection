@@ -240,7 +240,7 @@ export function App() {
             )}
           </span>
         )}
-        {sampleResult?.notice && (
+        {sampling && sampleResult?.notice && (
           <span
             className={sampleResult.status === 'out' ? 'error' : 'sample-notice'}
             role="status"
