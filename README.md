@@ -25,8 +25,23 @@
   - 退出取样模式即隐藏画布标记与状态栏取样反馈，取样点状态保留；
   - 载入新的有效同尺寸单侧图后按原坐标重新取样；坐标越界则清除结果并说明原因；
   - 文件校验失败仍保留影像、视口与取样。
+- **裂隙测距**：载入图像对后开启「裂隙测距」，得到一把独立于擦镜分界的
+  原图像素测距尺：第一次左键确定裂隙起点，第二次确定终点并完成测量，
+  第三次点击开始新一轮。状态栏与尺线标签读取**水平差、垂直差与欧氏长度**
+  （两端为原图整数坐标，长度保留两位小数）。测距状态（模式 / 等待起点 /
+  等待终点 / 已完成 / 最近一次测量）由 App 统一持有；生命周期推进与距离
+  计算均为纯函数，`CompareCanvas` 只负责经专用回调提交点击与绘制青色
+  端点、实线、长度标签。测距模式下普通左键不移动分界，空格或中键平移仍可用；
+  缩放 / 平移只移动尺线屏幕位置，不改原图坐标。
+  - 点击落在小图居中留白：提示「此处无法测距」并保持当前阶段，端点与读数不动；
+  - 点击落在图像矩形右/下边缘内侧：取整越出边界的坐标钳回末列/末行像素；
+  - 第三次点击开始新一轮：以该点为新起点，最近一次完成读数暂留至新测量完成；
+  - 退出测距模式只隐藏尺线与读数，最近一次完成结果保留，重进即恢复显示；
+  - 载入新的有效同尺寸单侧图后继续使用原测量坐标；
+  - 测距与取样为互斥的两种左键工具；文件校验失败仍保留影像、视口与测量。
 - **状态栏**：实时显示倍率、分界像素、视口中心原图坐标；取样模式下承接取样
-  坐标、两组 RGBA、通道差与留白/越界反馈。
+  坐标、两组 RGBA、通道差与留白/越界反馈；测距模式下承接水平差 / 垂直差 /
+  欧氏长度、两端原图坐标与留白反馈。
 - **错误隔离**：损坏 / 非目标格式 / 异尺寸的新文件会指明原因，
   上一组有效影像与视口完整保留。
 
@@ -44,8 +59,8 @@ npm run dev        # http://localhost:5173
 ## 测试与验收
 
 ```bash
-npm run test:unit  # Vitest：视口坐标/分界、取样取整/留白/通道差
-npm run test:e2e   # Playwright：载入与交互、取样显示与标记（自动生成 PNG 夹具）
+npm run test:unit  # Vitest：视口坐标/分界、取样取整/留白/通道差、测距生命周期/两位小数距离
+npm run test:e2e   # Playwright：载入与交互、取样显示与标记、两点落尺/视口变化/退出后回归（自动生成 PNG 夹具）
 npm run verify     # 一次性验收：单测 + 构建 + e2e
 ```
 
@@ -88,16 +103,35 @@ docker compose up --build --exit-code-from verify verify
 
 全部换算/判定/差值均为纯函数，由 `tests/sample.test.ts` 覆盖边界。
 
+## 裂隙测距（src/core/ruler.ts）
+
+- 尺坐标同样以**原图整数坐标**为准，CSS → 原图复用 `sample.resolveSamplePoint`
+  （含居中留白判定与右/下边缘钳回），故缩放/平移只移动尺线屏幕位置。
+- `measurePoints(start, end)` 为纯函数：端点取整、水平差 `dx` / 垂直差 `dy`
+  （带符号）及其绝对值，欧氏长度 `√(dx²+dy²)` 经 `roundDistance` 保留两位小数，
+  `formatDistance` 固定展示两位。
+- 生命周期三阶段 `await-start → await-end → done` 由纯函数 `advanceRuler`
+  按次推进：第一击定起点、第二击定终点并完成、第三击以该点为新一轮起点
+  （旧完成读数暂留至新测量完成）。`rulerBlankNotice` 处理居中留白：只置
+  「此处无法测距」提示，阶段与端点/读数保持不变。
+- App 持有模式开关与尺状态；`CompareCanvas` 经专用 `onRuler` 回调提交每次
+  点击后的完整状态，并绘制青色（`#27e6e6`）端点、实线与中点长度标签。
+  退出模式仅隐藏，最近一次完成结果保留。
+
+全部生命周期推进/距离/留白保持均为纯函数，由 `tests/ruler.test.ts` 覆盖。
+
 ## 目录结构
 
 ```
 src/core/viewport.ts      视口/分界坐标纯函数
 src/core/sample.ts        取样坐标换算、留白/越界判定、通道差纯函数
+src/core/ruler.ts         测距生命周期、两点距离（两位小数）纯函数
 src/core/loadImage.ts     魔数嗅探 + 解码校验
-src/components/CompareCanvas.tsx  Canvas 渲染、模式化指针交互、像素读取与标记
-src/App.tsx               影像状态机、视口/取样状态、状态栏
+src/components/CompareCanvas.tsx  Canvas 渲染、模式化指针交互、像素读取与标记/尺线
+src/App.tsx               影像状态机、视口/取样/测距状态、状态栏
 tests/viewport.test.ts    视口 Vitest 单测
 tests/sample.test.ts      取样 Vitest 单测
+tests/ruler.test.ts       测距 Vitest 单测
 e2e/compare.spec.ts       Playwright 端到端
 scripts/make-fixtures.mjs 纯 Node PNG 夹具生成器
 Dockerfile                deps → build → web(nginx) / verify

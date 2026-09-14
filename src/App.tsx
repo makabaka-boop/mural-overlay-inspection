@@ -9,6 +9,11 @@ import {
 } from './core/viewport';
 import { decodeImageFile, ImageLoadError, type LoadedImage } from './core/loadImage';
 import type { SamplePoint, SampleResult } from './core/sample';
+import {
+  formatDistance,
+  initialRulerState,
+  type RulerState,
+} from './core/ruler';
 import { CompareCanvas } from './components/CompareCanvas';
 
 type Slot = 'before' | 'after';
@@ -58,7 +63,28 @@ export function App() {
   const [samplePoint, setSamplePoint] = useState<SamplePoint | null>(null);
   const [sampleResult, setSampleResult] = useState<SampleResult | null>(null);
 
+  // 测距状态由 App 统一持有：模式开关与尺的生命周期（等待起点/终点/已完成）。
+  // 端点与读数均为原图坐标，缩放/平移只改变屏幕位置；退出模式只隐藏、不清除。
+  const [ranging, setRanging] = useState(false);
+  const [ruler, setRuler] = useState<RulerState>(initialRulerState);
+
   const pairSize = useMemo(() => pairOf(images), [images]);
+
+  // 取样与测距为两种互斥的左键工具
+  const toggleSampling = useCallback(() => {
+    setSampling((v) => !v);
+    setRanging(false);
+  }, []);
+  const toggleRanging = useCallback(() => {
+    setRanging((v) => !v);
+    setSampling(false);
+  }, []);
+
+  // 测距尺点击由 CompareCanvas 通过专用回调提交：
+  // 已解析为原图坐标的有效点击推进生命周期；留白点击仅置提示、阶段不变
+  const handleRuler = useCallback((next: RulerState) => {
+    setRuler(next);
+  }, []);
 
   const handleSample = useCallback((result: SampleResult) => {
     // 留白点击保留上一次有效结果：仅更新反馈，不覆盖有效结果与取样点
@@ -166,15 +192,24 @@ export function App() {
             </div>
           ))}
         </div>
-        <div className="sample-group">
+        <div className="tool-group">
           <button
             type="button"
             data-testid="toggle-sampling"
             aria-pressed={sampling}
             disabled={!pairSize}
-            onClick={() => setSampling((v) => !v)}
+            onClick={toggleSampling}
           >
             像素取样
+          </button>
+          <button
+            type="button"
+            data-testid="toggle-ranging"
+            aria-pressed={ranging}
+            disabled={!pairSize}
+            onClick={toggleRanging}
+          >
+            裂隙测距
           </button>
         </div>
         <div className="zoom-group" role="group" aria-label="倍率">
@@ -203,10 +238,13 @@ export function App() {
           imageSize={pairSize}
           sampling={sampling}
           samplePoint={samplePoint}
+          ranging={ranging}
+          ruler={ruler}
           onCenterChange={setCenter}
           onDividerChange={setDivider}
           onCanvasSize={handleCanvasSize}
           onSample={handleSample}
+          onRuler={handleRuler}
         />
       </main>
 
@@ -249,10 +287,42 @@ export function App() {
             {sampleResult.notice}
           </span>
         )}
+        {ranging && (
+          <span className="ruler-readout" data-testid="ruler-readout">
+            测距
+            {ruler.measurement && (
+              <>
+                {' '}
+                水平 <strong data-testid="ruler-horizontal">{ruler.measurement.horizontal} px</strong>{' '}
+                垂直 <strong data-testid="ruler-vertical">{ruler.measurement.vertical} px</strong>{' '}
+                长度{' '}
+                <strong data-testid="ruler-distance">
+                  {formatDistance(ruler.measurement.distance)} px
+                </strong>
+                <span className="ruler-coords" data-testid="ruler-coords">
+                  {` (${ruler.measurement.start.x}, ${ruler.measurement.start.y}) → (${ruler.measurement.end.x}, ${ruler.measurement.end.y})`}
+                </span>
+              </>
+            )}
+            {!ruler.measurement &&
+              (ruler.phase === 'await-end' ? (
+                <span className="ruler-phase">起点已记录，请点击终点</span>
+              ) : (
+                <span className="ruler-phase">请点击裂隙起点</span>
+              ))}
+          </span>
+        )}
+        {ranging && ruler.notice && (
+          <span className="ruler-notice" role="status" data-testid="ruler-notice">
+            {ruler.notice}
+          </span>
+        )}
         <span className="hint">
           {sampling
             ? '取样模式：点击画布取该原图坐标像素 · 空格或中键仍可平移 · 左键不移动分界'
-            : '拖动移动分界 · 按住空格拖动或滚轮平移 · ←/→ 微调分界'}
+            : ranging
+              ? '测距模式：第一次点击定起点，第二次定终点，第三次开始新一轮 · 空格或中键仍可平移 · 左键不移动分界'
+              : '拖动移动分界 · 按住空格拖动或滚轮平移 · ←/→ 微调分界'}
         </span>
       </footer>
     </div>

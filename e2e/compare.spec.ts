@@ -467,3 +467,264 @@ test('像素取样：文件校验失败仍保留影像、视口与取样', async
   const px = await readPixel(page, 10, Math.round(box.height / 2));
   expect(px[3]).toBe(255);
 });
+
+// ── 裂隙测距 ─────────────────────────────────────────────────────────────
+
+/** 在 (x0,y0) 周围搜索青色测距像素（端点/实线/标签，#27e6e6） */
+async function findCyan(
+  page: Page,
+  cx: number,
+  cy: number,
+  radius = 8,
+): Promise<{ x: number; y: number } | null> {
+  return page.evaluate(
+    ({ x0, y0, r }) => {
+      const c = document.querySelector('canvas')!;
+      const ctx = c.getContext('2d')!;
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const x = Math.round(x0 + dx);
+          const y = Math.round(y0 + dy);
+          if (x < 0 || y < 0 || x >= c.width || y >= c.height) continue;
+          const d = Array.from(ctx.getImageData(x, y, 1, 1).data);
+          // 青色 #27e6e6：绿/蓝高且接近，红通道明显更低
+          if (d[1] > 200 && d[2] > 200 && d[0] < 90 && Math.abs(d[1] - d[2]) < 30) {
+            return { x, y };
+          }
+        }
+      }
+      return null;
+    },
+    { x0: cx, y0: cy, r: radius },
+  );
+}
+
+test('裂隙测距：载图后两点落尺，读取水平差/垂直差/欧氏长度并显示青色端点实线标签', async ({
+  page,
+}) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  const p1 = { x: 300, y: 150 };
+  const p2 = { x: 500, y: 250 };
+  const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  // 1× 初始视口中心为图像中心 (800,600)：原图坐标 = 中心 + (CSS − 画布中心)
+  const toImage = (p: { x: number; y: number }) => ({
+    x: 800 + Math.round(p.x - box.width / 2),
+    y: 600 + Math.round(p.y - box.height / 2),
+  });
+  const i1 = toImage(p1);
+  const i2 = toImage(p2);
+
+  await expect(page.locator('[data-testid="ruler-readout"]')).toHaveCount(0);
+  await page.locator('[data-testid="toggle-ranging"]').click();
+  await expect(page.locator('[data-testid="ruler-readout"]')).toBeVisible();
+
+  // 第一次点击：起点
+  await page.mouse.click(box.x + p1.x, box.y + p1.y);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveCount(0);
+  expect(await findCyan(page, p1.x, p1.y)).not.toBeNull();
+  expect(await findCyan(page, p2.x, p2.y)).toBeNull();
+  // 测距模式下左键不移动分界
+  await expect(page.locator(labels.divider)).toHaveText(`${Math.round(box.width / 2)} px`);
+
+  // 第二次点击：终点并完成
+  await page.mouse.click(box.x + p2.x, box.y + p2.y);
+  await expect(page.locator('[data-testid="ruler-horizontal"]')).toHaveText('200 px');
+  await expect(page.locator('[data-testid="ruler-vertical"]')).toHaveText('100 px');
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('223.61 px');
+  // 两端点与实线（取线段上三个点）均为青色
+  expect(await findCyan(page, p1.x, p1.y)).not.toBeNull();
+  expect(await findCyan(page, p2.x, p2.y)).not.toBeNull();
+  for (const t of [0.25, 0.5, 0.75]) {
+    expect(
+      await findCyan(
+        page,
+        Math.round(p1.x + (p2.x - p1.x) * t),
+        Math.round(p1.y + (p2.y - p1.y) * t),
+        3,
+      ),
+    ).not.toBeNull();
+  }
+  // 长度标签在中点附近
+  expect(await findCyan(page, mid.x + 7, mid.y - 15, 30)).not.toBeNull();
+  // 原图坐标读数（整数端点）
+  await expect(page.locator('[data-testid="ruler-coords"]')).toContainText(`(${i1.x}, ${i1.y})`);
+  await expect(page.locator('[data-testid="ruler-coords"]')).toContainText(`(${i2.x}, ${i2.y})`);
+
+  // 分界仍未被左键移动
+  await expect(page.locator(labels.divider)).toHaveText(`${Math.round(box.width / 2)} px`);
+});
+
+test('裂隙测距：缩放和平移只改变尺线屏幕位置，读数不变', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  // 两点相对画布中心对称：中点恒为画布中心，缩放后中点屏幕位置不变。
+  // 原图差 (200,80) → √(200²+80²)=215.41；偏移取 100，4× 下端点仍在画布内（240/1040）。
+  const p1 = { x: Math.round(box.width / 2) - 100, y: Math.round(box.height / 2) - 40 };
+  const p2 = { x: Math.round(box.width / 2) + 100, y: Math.round(box.height / 2) + 40 };
+  const mid = { x: Math.round(box.width / 2), y: Math.round(box.height / 2) };
+  await page.locator('[data-testid="toggle-ranging"]').click();
+  await page.mouse.click(box.x + p1.x, box.y + p1.y);
+  await page.mouse.click(box.x + p2.x, box.y + p2.y);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('215.41 px');
+  expect(await findCyan(page, mid.x, mid.y, 6)).not.toBeNull();
+
+  // 4×：视口仍以图像中心为中心，中点（在画布中心）不动；端点屏幕位置随倍率移动。
+  const z4 = (p: { x: number; y: number }) => ({
+    x: Math.round(mid.x + 4 * (p.x - mid.x)),
+    y: Math.round(mid.y + 4 * (p.y - mid.y)),
+  });
+  await page.locator('[data-testid="zoom-4"]').click();
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('215.41 px');
+  await expect(page.locator('[data-testid="ruler-horizontal"]')).toHaveText('200 px');
+  await expect(page.locator('[data-testid="ruler-vertical"]')).toHaveText('80 px');
+  expect(await findCyan(page, mid.x, mid.y, 6)).not.toBeNull();
+  const p1z4 = z4(p1);
+  const p2z4 = z4(p2);
+  expect(p1z4.x).toBeGreaterThan(0);
+  expect(p2z4.x).toBeLessThanOrEqual(box.width);
+  // 两个端点 4× 屏幕位置（1× 时该处无线，确为缩放后移动而来）
+  expect(await findCyan(page, p1z4.x, p1z4.y)).not.toBeNull();
+  expect(await findCyan(page, p2z4.x, p2z4.y)).not.toBeNull();
+
+  // 空格平移 80 CSS（4× → 20 原图）：尺线整体右移 80px，读数仍不变
+  await page.keyboard.down(' ');
+  await page.mouse.move(box.x + mid.x, box.y + mid.y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + mid.x + 80, box.y + mid.y, { steps: 4 });
+  await page.mouse.up();
+  await page.keyboard.up(' ');
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('215.41 px');
+  expect(await findCyan(page, mid.x, mid.y, 6)).toBeNull();
+  expect(await findCyan(page, mid.x + 80, mid.y, 6)).not.toBeNull();
+});
+
+test('裂隙测距：中键仍可平移且不产生点击，左键全程不移动分界', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-ranging"]').click();
+
+  // 中键拖拽平移（button=1）：不推进尺生命周期
+  await page.mouse.move(box.x + 400, box.y + 200);
+  await page.mouse.down({ button: 'middle' });
+  await page.mouse.move(box.x + 300, box.y + 200, { steps: 4 });
+  await page.mouse.up({ button: 'middle' });
+  await expect(page.locator(labels.center)).toHaveText('(900, 600)');
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveCount(0);
+
+  // 随后左键两点仍可正常完成测量
+  await page.mouse.click(box.x + 300, box.y + 150);
+  await page.mouse.click(box.x + 360, box.y + 230);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('100.00 px');
+  await expect(page.locator(labels.divider)).toHaveText(`${Math.round(box.width / 2)} px`);
+});
+
+test('裂隙测距：第三次点击开始新一轮并保留最近一次完成读数', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-ranging"]').click();
+  await page.mouse.click(box.x + 300, box.y + 150);
+  await page.mouse.click(box.x + 500, box.y + 250);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('223.61 px');
+
+  // 第三次点击：开始新一轮（该点为新起点），旧完成读数暂留
+  await page.mouse.click(box.x + 100, box.y + 100);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('223.61 px');
+  expect(await findCyan(page, 100, 100)).not.toBeNull();
+
+  // 第四次点击完成新一轮：读数更新为 0 与新长度
+  await page.mouse.click(box.x + 160, box.y + 180);
+  await expect(page.locator('[data-testid="ruler-horizontal"]')).toHaveText('60 px');
+  await expect(page.locator('[data-testid="ruler-vertical"]')).toHaveText('80 px');
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('100.00 px');
+});
+
+test('裂隙测距：点击居中留白提示无法测距并保持当前阶段', async ({ page }) => {
+  await loadPair(page, 'small-before.png', 'small-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-ranging"]').click();
+
+  // 小图 120×90 居中：先在图像内部完成一次测量
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.click(box.x + box.width / 2 + 30, box.y + box.height / 2 + 40);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('50.00 px');
+
+  // 点击左上角留白：提示无法测距，阶段与读数都保持
+  await page.mouse.click(box.x + 5, box.y + 5);
+  await expect(page.locator('[data-testid="ruler-notice"]')).toHaveText('此处无法测距');
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('50.00 px');
+  // 留白处不画青色端点
+  expect(await findCyan(page, 5, 5)).toBeNull();
+
+  // 再点图像内部：作为“第三击”开始新一轮，提示清除
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.locator('[data-testid="ruler-notice"]')).toHaveCount(0);
+  expect(await findCyan(page, box.width / 2, box.height / 2)).not.toBeNull();
+});
+
+test('裂隙测距：同尺寸单侧替换后继续使用原测量坐标，读数不变', async ({ page }) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  await page.locator('[data-testid="toggle-ranging"]').click();
+  await page.mouse.click(box.x + 300, box.y + 150);
+  await page.mouse.click(box.x + 500, box.y + 250);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('223.61 px');
+  const endpoints = await page.locator('[data-testid="ruler-coords"]').textContent();
+
+  // 用同尺寸图替换修复前槽位：测量基于原图坐标，端点与读数不受影响
+  await page.setInputFiles('[data-testid="input-before"]', FIX('big-after.png'));
+  await expect(page.locator('[data-testid="error-before"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('223.61 px');
+  await expect(page.locator('[data-testid="ruler-coords"]')).toHaveText(endpoints!);
+  // 尺线仍在
+  expect(await findCyan(page, 400, 200, 6)).not.toBeNull();
+});
+
+test('裂隙测距：退出只隐藏尺线读数，重进恢复，且擦镜/取样/文件校验仍可用', async ({
+  page,
+}) => {
+  await loadPair(page, 'big-before.png', 'big-after.png');
+  const box = await canvasBox(page);
+  const midY = box.y + box.height / 2;
+  await page.locator('[data-testid="toggle-ranging"]').click();
+  await page.mouse.click(box.x + 300, box.y + 150);
+  await page.mouse.click(box.x + 500, box.y + 250);
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('223.61 px');
+
+  // 退出测距：尺线/读数隐藏，最近一次完成结果保留
+  await page.locator('[data-testid="toggle-ranging"]').click();
+  await expect(page.locator('[data-testid="ruler-readout"]')).toHaveCount(0);
+  await expect(page.locator('[data-testid="ruler-notice"]')).toHaveCount(0);
+  expect(await findCyan(page, 400, 200, 12)).toBeNull();
+
+  // 原有擦镜：左键拖动恢复移动分界、方向键微调
+  await page.mouse.move(box.x + 300, midY);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 320, midY, { steps: 3 });
+  await page.mouse.up();
+  await expect(page.locator(labels.divider)).toHaveText('320 px');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator(labels.divider)).toHaveText('321 px');
+
+  // 像素取样仍可用（与测距互斥：开取样时测距保持关闭）
+  await page.locator('[data-testid="toggle-sampling"]').click();
+  await expect(page.locator('[data-testid="toggle-ranging"]')).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await page.mouse.click(box.x + 200, box.y + 100);
+  await expect(page.locator('[data-testid="sample-coord"]')).not.toHaveText('—');
+
+  // 文件校验仍可用：损坏文件被拒并提示原因
+  await page.setInputFiles('[data-testid="input-before"]', FIX('corrupt.png'));
+  await expect(page.locator('[data-testid="error-before"]')).toContainText('损坏');
+
+  // 重新进入测距：最近一次完成结果按原图坐标恢复显示
+  await page.locator('[data-testid="toggle-ranging"]').click();
+  await expect(page.locator('[data-testid="toggle-sampling"]')).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await expect(page.locator('[data-testid="ruler-distance"]')).toHaveText('223.61 px');
+  expect(await findCyan(page, 400, 200, 12)).not.toBeNull();
+});

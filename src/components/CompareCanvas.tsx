@@ -20,6 +20,12 @@ import {
   type SamplePoint,
   type SampleResult,
 } from '../core/sample';
+import {
+  advanceRuler,
+  formatDistance,
+  rulerBlankNotice,
+  type RulerState,
+} from '../core/ruler';
 
 interface Props {
   before: LoadedImage | null;
@@ -32,10 +38,16 @@ interface Props {
   sampling: boolean;
   /** 当前取样点（原图整数坐标）；缩放/平移只移动其屏幕位置 */
   samplePoint: SamplePoint | null;
+  /** 裂隙测距模式（状态由 App 统一持有） */
+  ranging: boolean;
+  /** 测距尺生命周期状态（端点为原图坐标） */
+  ruler: RulerState;
   onCenterChange: (center: Point) => void;
   onDividerChange: (divider: number) => void;
   onCanvasSize: (size: Size) => void;
   onSample: (result: SampleResult) => void;
+  /** 测距专用回调：提交一次点击推进后的完整尺状态 */
+  onRuler: (state: RulerState) => void;
 }
 
 export function CompareCanvas(props: Props) {
@@ -48,10 +60,13 @@ export function CompareCanvas(props: Props) {
     imageSize,
     sampling,
     samplePoint,
+    ranging,
+    ruler,
     onCenterChange,
     onDividerChange,
     onCanvasSize,
     onSample,
+    onRuler,
   } = props;
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -249,7 +264,71 @@ export function CompareCanvas(props: Props) {
       ctx.fill();
       ctx.restore();
     }
-  }, [before, after, zoom, center, divider, imageSize, cssSize, sampling, samplePoint]);
+
+    // 测距尺：端点/实线/长度标签均按原图坐标映射到屏幕，
+    // 故缩放/平移只移动其屏幕位置；退出测距模式即整段隐藏。
+    if (ranging && ruler.start) {
+      const RULER = '#27e6e6';
+      const startCss = samplePointToCss(ruler.start, center, cssSize, zoom);
+      const drawEndpoint = (p: Point) => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = RULER;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(4, 30, 30, 0.95)';
+        ctx.stroke();
+      };
+
+      // 等待终点阶段仅画起点；完成阶段画实线、终点与长度标签
+      if (ruler.phase === 'done' && ruler.end && ruler.measurement) {
+        const endCss = samplePointToCss(ruler.end, center, cssSize, zoom);
+        ctx.save();
+        ctx.strokeStyle = RULER;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(startCss.x, startCss.y);
+        ctx.lineTo(endCss.x, endCss.y);
+        ctx.stroke();
+        ctx.restore();
+
+        drawEndpoint(startCss);
+        drawEndpoint(endCss);
+
+        const label = `${formatDistance(ruler.measurement.distance)} px`;
+        ctx.save();
+        ctx.font = '12px ui-monospace, Menlo, Consolas, monospace';
+        ctx.textBaseline = 'middle';
+        const tw = ctx.measureText(label).width;
+        const padX = 5;
+        // 标签默认在线段中点右上方，越界则收进画布，避免被裁切
+        let lx = (startCss.x + endCss.x) / 2 + 7;
+        let ly = (startCss.y + endCss.y) / 2 - 15;
+        lx = Math.min(Math.max(lx, 2), cssSize.width - tw - padX * 2 - 2);
+        ly = Math.min(Math.max(ly, 9), cssSize.height - 9);
+        ctx.fillStyle = 'rgba(4, 30, 30, 0.82)';
+        ctx.fillRect(lx - padX, ly - 9, tw + padX * 2, 18);
+        ctx.fillStyle = RULER;
+        ctx.textAlign = 'left';
+        ctx.fillText(label, lx, ly + 0.5);
+        ctx.restore();
+      } else if (ruler.phase === 'await-end') {
+        drawEndpoint(startCss);
+      }
+    }
+  }, [
+    before,
+    after,
+    zoom,
+    center,
+    divider,
+    imageSize,
+    cssSize,
+    sampling,
+    samplePoint,
+    ranging,
+    ruler,
+  ]);
 
   const setDividerFromPointer = (clientX: number) => {
     const canvas = canvasRef.current;
@@ -286,19 +365,45 @@ export function CompareCanvas(props: Props) {
     if (pBefore && pAfter) onSample(okSampleResult(point, pBefore, pAfter));
   };
 
+  // 测距点击：解析为原图坐标后经专用回调提交，由纯函数推进尺生命周期
+  const takeRulerFromPointer = (clientX: number, clientY: number) => {
+    const s = latest.current;
+    const canvas = canvasRef.current;
+    if (!canvas || !s.imageSize) return;
+    const rect = canvas.getBoundingClientRect();
+    const css = { x: clientX - rect.left, y: clientY - rect.top };
+    const resolution = resolveSamplePoint(
+      css,
+      s.center,
+      s.imageSize,
+      s.cssSize,
+      s.zoom,
+    );
+    if (resolution.status === 'blank') {
+      // 居中留白：提示并保持当前阶段（端点与读数不变）
+      onRuler(rulerBlankNotice(ruler));
+      return;
+    }
+    // resolution 为 ok：边缘内侧取整越界已在 resolveSamplePoint 内钳回末列/末行
+    if (resolution.point) onRuler(advanceRuler(ruler, resolution.point).state);
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!imageSize) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     e.currentTarget.focus();
     lastPos.current = { x: e.clientX, y: e.clientY };
     if (e.button === 1 || spaceHeld.current) {
-      // 空格或中键平移：取样模式下仍可用
+      // 空格或中键平移：取样/测距模式下仍可用
       dragMode.current = 'pan';
       e.preventDefault();
     } else if (e.button === 0) {
       if (sampling) {
         // 取样模式：普通左键不移动分界
         takeSampleFromPointer(e.clientX, e.clientY);
+      } else if (ranging) {
+        // 测距模式：普通左键提交尺点击，不移动分界
+        takeRulerFromPointer(e.clientX, e.clientY);
       } else {
         dragMode.current = 'divider';
         setDividerFromPointer(e.clientX);
@@ -342,7 +447,7 @@ export function CompareCanvas(props: Props) {
         style={{
           width: cssSize.width,
           height: cssSize.height,
-          cursor: sampling ? 'crosshair' : 'ew-resize',
+          cursor: sampling || ranging ? 'crosshair' : 'ew-resize',
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

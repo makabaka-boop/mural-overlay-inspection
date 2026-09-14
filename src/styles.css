@@ -82,12 +82,13 @@ body {
   white-space: nowrap;
 }
 
-.sample-group {
+.tool-group {
   display: flex;
+  gap: 6px;
   margin-left: auto;
 }
 
-.sample-group button {
+.tool-group button {
   padding: 5px 12px;
   border: 1px solid #3a3e4c;
   border-radius: 5px;
@@ -97,13 +98,20 @@ body {
   cursor: pointer;
 }
 
-.sample-group button[aria-pressed='true'] {
+.tool-group button[aria-pressed='true'] {
   background: #b8860b;
   border-color: #ffd400;
   color: #1a1a1a;
 }
 
-.sample-group button:disabled {
+/* 裂隙测距激活时以青色区分，与取样的黄色工具互不冲突（两模式互斥） */
+.tool-group button[data-testid='toggle-ranging'][aria-pressed='true'] {
+  background: #0b8f8f;
+  border-color: #27e6e6;
+  color: #042626;
+}
+
+.tool-group button:disabled {
   opacity: 0.45;
   cursor: default;
 }
@@ -185,6 +193,29 @@ body {
 .sample-notice {
   font-size: 12px;
   color: #ffd400;
+  white-space: nowrap;
+}
+
+.ruler-readout {
+  color: #7fe3e3;
+}
+
+.ruler-readout strong {
+  color: #27e6e6;
+}
+
+.ruler-readout .ruler-coords {
+  color: #9fdede;
+  font-variant-numeric: tabular-nums;
+}
+
+.ruler-readout .ruler-phase {
+  color: #9fdede;
+}
+
+.ruler-notice {
+  font-size: 12px;
+  color: #27e6e6;
   white-space: nowrap;
 }
 
